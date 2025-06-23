@@ -13,15 +13,44 @@ import (
 )
 
 type pattern struct {
-	Flags    string   `json:"flags,omitempty"`
+	Flags    []string `json:"flags,omitempty"`
 	Pattern  string   `json:"pattern,omitempty"`
 	Patterns []string `json:"patterns,omitempty"`
 	Engine   string   `json:"engine,omitempty"`
 }
 
+// Allow backward-compatible unmarshalling for flags as string or []string
+func (p *pattern) UnmarshalJSON(data []byte) error {
+	type Alias pattern
+	aux := &struct {
+		Flags interface{} `json:"flags,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(p),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	switch v := aux.Flags.(type) {
+	case string:
+		if v != "" {
+			p.Flags = strings.Fields(v)
+		}
+	case []interface{}:
+		flags := []string{}
+		for _, f := range v {
+			if s, ok := f.(string); ok {
+				flags = append(flags, s)
+			}
+		}
+		p.Flags = flags
+	}
+	return nil
+}
+
 func main() {
 	var saveMode bool
-	flag.BoolVar(&saveMode, "save", false, "save a pattern (e.g: gf -save pat-name -Hnri 'search-pattern')")
+	flag.BoolVar(&saveMode, "save", false, "save a pattern (e.g: ugf -save pat-name -Hnri 'search-pattern')")
 
 	var listMode bool
 	flag.BoolVar(&listMode, "list", false, "list available patterns")
@@ -37,7 +66,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "%s\n", err)
 			return
 		}
-
 		fmt.Println(strings.Join(pats, "\n"))
 		return
 	}
@@ -77,7 +105,6 @@ func main() {
 	pat := pattern{}
 	dec := json.NewDecoder(f)
 	err = dec.Decode(&pat)
-
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pattern file '%s' is malformed: %s\n", filename, err)
 		return
@@ -89,7 +116,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "pattern file '%s' contains no pattern(s)\n", filename)
 			return
 		}
-
 		pat.Pattern = "(" + strings.Join(pat.Patterns, "|") + ")"
 	}
 
@@ -101,9 +127,7 @@ func main() {
 	if dumpMode {
 		if operator == "ugrep" && len(pat.Patterns) > 0 {
 			args := []string{}
-			if pat.Flags != "" {
-				args = append(args, pat.Flags)
-			}
+			args = append(args, pat.Flags...)
 			for _, p := range pat.Patterns {
 				args = append(args, "-e", p)
 			}
@@ -112,15 +136,14 @@ func main() {
 			}
 			fmt.Printf("%s %s\n", operator, strings.Join(args, " "))
 		} else {
-			fmt.Printf("%s %v %q %v\n", operator, pat.Flags, pat.Pattern, files)
+			fmt.Printf("%s %s %q %v\n",
+				operator, strings.Join(pat.Flags, " "), pat.Pattern, files)
 		}
 	} else {
 		var cmd *exec.Cmd
 		args := []string{}
 		if operator == "ugrep" && len(pat.Patterns) > 0 {
-			if pat.Flags != "" {
-				args = append(args, pat.Flags)
-			}
+			args = append(args, pat.Flags...)
 			for _, p := range pat.Patterns {
 				args = append(args, "-e", p)
 			}
@@ -128,9 +151,7 @@ func main() {
 				args = append(args, files)
 			}
 		} else {
-			if pat.Flags != "" {
-				args = append(args, pat.Flags)
-			}
+			args = append(args, pat.Flags...)
 			args = append(args, pat.Pattern)
 			if !stdinIsPipe() && files != "" {
 				args = append(args, files)
@@ -161,13 +182,11 @@ func savePattern(name, flags, pat string) error {
 	if name == "" {
 		return errors.New("name cannot be empty")
 	}
-
 	if pat == "" {
 		return errors.New("pattern cannot be empty")
 	}
-
 	p := &pattern{
-		Flags:   flags,
+		Flags:   strings.Fields(flags),
 		Pattern: pat,
 	}
 
@@ -201,7 +220,6 @@ func getPatterns() ([]string, error) {
 	if err != nil {
 		return out, fmt.Errorf("failed to determine pattern directory: %s", err)
 	}
-	_ = patDir
 
 	files, err := filepath.Glob(patDir + "/*.json")
 	if err != nil {
